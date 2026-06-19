@@ -220,16 +220,25 @@ def fix():
     if not data:
         return jsonify({'error': 'Dados inválidos'}), 400
 
-    content = data.get('content', '')
     errors = data.get('errors', [])
     filename = data.get('filename', 'arquivo.TXT')
     temp_path = data.get('temp_path', '')
+    content = data.get('content', '')
 
     if not errors:
         return jsonify({'error': 'Nenhum erro para corrigir'}), 400
 
+    # Try to read content from temp_path if not provided
+    if not content and temp_path:
+        try:
+            with open(temp_path, 'rb') as f:
+                raw = f.read()
+            content = raw.decode('latin-1')
+        except Exception as e:
+            return jsonify({'error': f'Não foi possível ler o arquivo temporário: {e}'}), 400
+
     if not content:
-        return jsonify({'error': 'Conteúdo do arquivo vazio'}), 400
+        return jsonify({'error': 'Conteúdo do arquivo vazio e sem temp_path válido'}), 400
 
     # Try DeepSeek first
     result = fix_file_with_deepseek(content, errors, filename)

@@ -192,7 +192,6 @@ async function fixErrors() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: validationResult.content,
                 errors: validationResult.errors,
                 filename: fileName,
                 temp_path: tempPath,
