@@ -1,5 +1,7 @@
 *.TXT
 *.txt
+!runtime.txt
+!requirements.txt
 *.bak
 *.exe
 *.dll
