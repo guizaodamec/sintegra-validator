@@ -30,8 +30,12 @@ DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
 DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 DEEPSEEK_MODEL = 'deepseek-chat'  # or deepseek-reasoner for complex fixes
 
-# Load MD documentation at startup
-MD_PATH = Path(__file__).parent / 'estrutura-sintegra.md'
+# Load MD documentation at startup (check docs/ folder first, then root)
+_MD_ROOT = Path(__file__).parent
+_MD_PATH = _MD_ROOT / 'docs' / 'estrutura-sintegra.md'
+if not _MD_PATH.exists():
+    _MD_PATH = _MD_ROOT / 'estrutura-sintegra.md'
+MD_PATH = _MD_PATH
 MD_DOCS = MD_PATH.read_text(encoding='utf-8') if MD_PATH.exists() else ''
 
 
@@ -478,10 +482,20 @@ def confirm_fix():
 
 
 def update_md_with_case(errors: list, description: str, filename: str) -> str:
-    """Append a new confirmed case to estrutura-sintegra.md."""
-    md_path = Path(__file__).parent / 'estrutura-sintegra.md'
+    """Append a new confirmed case to estrutura-sintegra.md (updates both docs/ and root)."""
+    root = Path(__file__).parent
+    md_paths = [
+        root / 'docs' / 'estrutura-sintegra.md',
+        root / 'estrutura-sintegra.md',
+    ]
 
-    if not md_path.exists():
+    md_path = None
+    for p in md_paths:
+        if p.exists():
+            md_path = p
+            break
+
+    if not md_path:
         return MD_DOCS
 
     md_content = md_path.read_text(encoding='utf-8')
@@ -528,8 +542,10 @@ def update_md_with_case(errors: list, description: str, filename: str) -> str:
     if insertion_point > 0:
         md_content = md_content[:insertion_point] + case_entry + '\n---\n\n' + md_content[insertion_point:]
 
-    # Write back
-    md_path.write_text(md_content, encoding='utf-8')
+    # Write back to all MD locations
+    for p in md_paths:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(md_content, encoding='utf-8')
 
     # Try to commit to git if available
     try:
