@@ -111,15 +111,20 @@ function handleFileSelect(event) {
     if (!file) return;
 
     fileName = file.name;
-    document.getElementById('file-name').textContent = fileName;
+
+    // Update UI immediately
+    const fileNameEl = document.getElementById('file-name');
+    fileNameEl.textContent = '📄 ' + fileName + ' (' + formatSize(file.size) + ')';
+    fileNameEl.classList.add('text-accent');
     document.getElementById('validate-btn').disabled = false;
 
-    // Read file content
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        fileContent = e.target.result;
-    };
-    reader.readAsText(file, 'ISO-8859-1');
+    // Hide previous results
+    document.getElementById('results-section').classList.add('hidden');
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    return (bytes / 1024).toFixed(1) + ' KB';
 }
 
 // Drag and drop
@@ -137,12 +142,17 @@ dropZone.addEventListener('drop', (e) => {
 });
 
 async function validateFile() {
-    if (!fileContent) return;
+    const fileInput = document.getElementById('file-input');
+    const file = fileInput.files[0];
+    if (!file) {
+        showError('Selecione um arquivo primeiro.');
+        return;
+    }
 
+    fileName = file.name;
     showLoading('Validando arquivo...');
 
     const formData = new FormData();
-    const file = document.getElementById('file-input').files[0];
     formData.append('file', file);
 
     try {
@@ -170,6 +180,10 @@ async function validateFile() {
 
 async function fixErrors() {
     if (!validationResult || !validationResult.errors.length) return;
+    if (!validationResult.content) {
+        showError('Conteúdo do arquivo não disponível. Re-valide o arquivo.');
+        return;
+    }
 
     showLoading('Corrigindo com DeepSeek IA...');
 
@@ -178,7 +192,7 @@ async function fixErrors() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: validationResult.content || fileContent,
+                content: validationResult.content,
                 errors: validationResult.errors,
                 filename: fileName,
                 temp_path: tempPath,
