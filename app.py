@@ -340,95 +340,108 @@ def fix_stream():
 
             yield f"data: {json.dumps({'step': 'reading', 'msg': '📖 Lendo documentação SINTEGRA...'})}\n\n"
 
-            prompt = f"""Você é um especialista em arquivos SINTEGRA.
+            # Prompt otimizado: gerar script Python de correção (muito mais confiável que JSON com arquivo 46KB)
+            prompt = f"""Você é um especialista em SINTEGRA. Corrija o arquivo gerando um SCRIPT PYTHON.
 
-## Documentação de Referência
+## Documentação
 
 {MD_DOCS[:8000]}
 
-## Arquivo: {filename}
-## ERROS ENCONTRADOS:
-
+## ERROS:
 {errors_text}
 
-## Arquivo TXT (trecho relevante):
-
+## Arquivo: {filename}
 ```
-{file_preview[:40000]}
+{content[:20000]}
 ```
 
 ## Tarefa
 
-Corrija TODOS os erros. Explique cada passo ANTES de executá-lo.
-Depois retorne um JSON final com o conteúdo completo corrigido.
+Explique cada erro e depois gere um SCRIPT PYTHON que:
+1. Lê o arquivo com `encoding='latin-1'`
+2. Aplica TODAS as correções
+3. Salva corrigido com CR+LF
 
-Formato da resposta:
-1. Explique cada erro e a correção necessária (em português)
-2. No final, retorne EXATAMENTE: ```json
-{{"fixed_content": "<conteúdo completo do arquivo>"}}
-```
-
-O fixed_content deve ser o arquivo COMPLETO corrigido (todas as linhas), com CR+LF e encoding latin-1.
-"""
+Formato:
+1. Explicação de cada correção
+2. Script entre ```python ... ``` (executável)"""
 
             yield f"data: {json.dumps({'step': 'calling', 'msg': '🤖 Enviando para DeepSeek...'})}\n\n"
 
-            client = OpenAI(
-                api_key=DEEPSEEK_API_KEY,
-                base_url=DEEPSEEK_BASE_URL,
-            )
+            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
             response = client.chat.completions.create(
                 model=DEEPSEEK_MODEL,
                 messages=[
-                    {"role": "system", "content": "Você é um especialista em SINTEGRA. Explique cada passo da correção em português e no final retorne o JSON com o arquivo corrigido."},
+                    {"role": "system", "content": "Gere scripts Python para corrigir arquivos SINTEGRA."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
-                max_tokens=16000,
+                temperature=0.1, max_tokens=8000,
             )
 
             reply = response.choices[0].message.content.strip()
-
-            # Extrair etapas e JSON
             explanation = reply
             fixed_content = None
 
-            # Buscar JSON com fixed_content (pode ser enorme, multi-linha)
-            json_start = reply.find('{"fixed_content"')
-            if json_start < 0:
-                json_start = reply.find('{"fixed_content"'.replace('"', '&quot;'))
+            # Extrair script Python e executá-lo
+            py_match = re.search(r'```(?:python)?\s*\n(.*?)```', reply, re.DOTALL)
+            if py_match:
+                explanation = reply[:py_match.start()].strip()
+                script = py_match.group(1).strip()
 
-            if json_start >= 0:
-                # Extract from json_start, matching braces
-                depth = 0
-                json_end = -1
-                for i in range(json_start, len(reply)):
-                    if reply[i] == '{':
-                        depth += 1
-                    elif reply[i] == '}':
-                        depth -= 1
-                        if depth == 0:
-                            json_end = i + 1
-                            break
+                yield f"data: {json.dumps({'step': 'executing', 'msg': '⚡ Executando script de correção...'})}\n\n"
 
-                if json_end > 0:
-                    json_str = reply[json_start:json_end]
-                    # Try to fix common DeepSeek JSON issues
-                    json_str = json_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-                    try:
-                        result = json.loads(json_str)
-                        fixed_content = result.get('fixed_content', '')
-                        if fixed_content:
-                            # Unescape newlines that we double-escaped
-                            fixed_content = fixed_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
-                    except:
-                        # Try raw extraction (the fixed_content might be a raw string)
-                        raw_match = re.search(r'"fixed_content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}', reply[json_start:json_end], re.DOTALL)
-                        if raw_match:
-                            fixed_content = raw_match.group(1)
+                # Executar script em ambiente seguro
+                import subprocess, tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as sf:
+                    sf.write(script)
+                    sf.flush()
+                    script_path = sf.name
 
-                explanation = reply[:json_start].strip()
+                try:
+                    # Executar com timeout de 30s
+                    result = subprocess.run(
+                        ['python3', script_path],
+                        capture_output=True, text=True, timeout=30,
+                        env={**os.environ, 'FIX_INPUT': temp_path}
+                    )
+                    if result.stdout:
+                        for line in result.stdout.strip().split('\n')[:20]:
+                            yield f"data: {json.dumps({'step': 'script_out', 'msg': line})}\n\n"
+                    if result.stderr:
+                        for line in result.stderr.strip().split('\n')[:10]:
+                            yield f"data: {json.dumps({'step': 'script_err', 'msg': line})}\n\n"
+                except subprocess.TimeoutExpired:
+                    yield f"data: {json.dumps({'step': 'error', 'msg': 'Script excedeu timeout'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'step': 'error', 'msg': f'Erro ao executar: {e}'})}\n\n"
+                finally:
+                    os.unlink(script_path)
+
+                # Ler arquivo corrigido do temp_path original
+                try:
+                    with open(temp_path, 'rb') as f:
+                        raw = f.read()
+                    fixed_content = raw.decode('latin-1')
+                except:
+                    pass
+
+            if not fixed_content:
+                # Fallback: tentar JSON como antes
+                json_start = reply.find('{"fixed_content"')
+                if json_start >= 0:
+                    depth = 0
+                    json_end = -1
+                    for i in range(json_start, len(reply)):
+                        if reply[i] == '{': depth += 1
+                        elif reply[i] == '}':
+                            depth -= 1
+                            if depth == 0: json_end = i + 1; break
+                    if json_end > 0:
+                        try:
+                            result = json.loads(reply[json_start:json_end])
+                            fixed_content = result.get('fixed_content', '')
+                        except: pass
 
             # Enviar explicação como passos
             for line in explanation.split('\n'):
