@@ -1,0 +1,14 @@
+*.TXT
+*.txt
+*.bak
+*.exe
+*.dll
+*.HLP
+*.cnt
+__pycache__/
+*.pyc
+.env
+venv/
+.DS_Store
+uploads/
+outputs/

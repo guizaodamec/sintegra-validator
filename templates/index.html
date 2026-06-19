@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SINTEGRA Auto-Fix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a2e',
+                        accent: '#e94560',
+                        surface: '#16213e',
+                        card: '#0f3460',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #0a0a1a; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glow { box-shadow: 0 0 40px rgba(233, 69, 96, 0.15); }
+        .error-line:hover { background: rgba(233, 69, 96, 0.2); }
+        .upload-zone { border: 2px dashed rgba(233, 69, 96, 0.3); transition: all 0.3s; }
+        .upload-zone:hover { border-color: #e94560; background: rgba(233, 69, 96, 0.05); }
+        .spinner { animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="min-h-screen text-gray-100">
+
+<!-- Header -->
+<header class="border-b border-gray-800 bg-primary/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded bg-accent flex items-center justify-center text-white font-bold text-sm">S</div>
+            <div>
+                <h1 class="text-lg font-semibold">SINTEGRA <span class="text-accent">Auto-Fix</span></h1>
+                <p class="text-xs text-gray-500">Validação e correção automática via IA</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3 text-xs text-gray-500">
+            <a href="https://github.com/guizaodamec/sintegra-validator" target="_blank" class="hover:text-accent transition">GitHub</a>
+            <span class="text-gray-700">|</span>
+            <span>DeepSeek API</span>
+        </div>
+    </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-6 py-10">
+
+<!-- Upload Section -->
+<section id="upload-section" class="mb-10 fade-in">
+    <div class="bg-surface rounded-xl p-8 border border-gray-800 glow">
+        <h2 class="text-xl font-semibold mb-2">📄 Enviar Arquivo SINTEGRA</h2>
+        <p class="text-sm text-gray-400 mb-6">Formatos aceitos: .TXT (126 caracteres por linha, encoding latin-1, CR+LF)</p>
+
+        <div class="upload-zone rounded-lg p-10 text-center cursor-pointer"
+             id="drop-zone"
+             onclick="document.getElementById('file-input').click()">
+            <div class="text-4xl mb-3">📁</div>
+            <p class="text-gray-300 font-medium mb-1">Clique para selecionar ou arraste o arquivo</p>
+            <p class="text-xs text-gray-500" id="file-name">Nenhum arquivo selecionado</p>
+            <input type="file" id="file-input" class="hidden" accept=".TXT,.txt" onchange="handleFileSelect(event)">
+        </div>
+
+        <div class="flex gap-3 mt-6">
+            <button id="validate-btn" disabled
+                    onclick="validateFile()"
+                    class="flex-1 bg-accent hover:bg-red-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-3 px-6 rounded-lg transition flex items-center justify-center gap-2">
+                <span>🔍</span> Validar Arquivo
+            </button>
+            <button id="fix-btn" disabled
+                    onclick="fixErrors()"
+                    class="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-3 px-6 rounded-lg transition flex items-center justify-center gap-2">
+                <span>🤖</span> Corrigir com IA
+            </button>
+        </div>
+    </div>
+</section>
+
+<!-- Loading -->
+<section id="loading-section" class="hidden mb-10 fade-in">
+    <div class="bg-surface rounded-xl p-8 border border-gray-800 text-center">
+        <div class="spinner w-10 h-10 border-2 border-accent border-t-transparent rounded-full mx-auto mb-4"></div>
+        <p id="loading-text" class="text-gray-300">Processando...</p>
+    </div>
+</section>
+
+<!-- Results -->
+<section id="results-section" class="hidden mb-10 fade-in">
+    <div id="results-content"></div>
+</section>
+
+</main>
+
+<script>
+let fileContent = null;
+let fileName = null;
+let tempPath = null;
+let validationResult = null;
+
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    fileName = file.name;
+    document.getElementById('file-name').textContent = fileName;
+    document.getElementById('validate-btn').disabled = false;
+
+    // Read file content
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        fileContent = e.target.result;
+    };
+    reader.readAsText(file, 'ISO-8859-1');
+}
+
+// Drag and drop
+const dropZone = document.getElementById('drop-zone');
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-accent'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-accent'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('border-accent');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+        document.getElementById('file-input').files = e.dataTransfer.files;
+        handleFileSelect({ target: { files: [file] } });
+    }
+});
+
+async function validateFile() {
+    if (!fileContent) return;
+
+    showLoading('Validando arquivo...');
+
+    const formData = new FormData();
+    const file = document.getElementById('file-input').files[0];
+    formData.append('file', file);
+
+    try {
+        const resp = await fetch('/validate', { method: 'POST', body: formData });
+        validationResult = await resp.json();
+
+        if (validationResult.error) {
+            showError(validationResult.error);
+            return;
+        }
+
+        tempPath = validationResult.temp_path;
+
+        if (validationResult.valid) {
+            showSuccess(validationResult);
+            document.getElementById('fix-btn').disabled = true;
+        } else {
+            showErrors(validationResult);
+            document.getElementById('fix-btn').disabled = false;
+        }
+    } catch (e) {
+        showError('Erro de conexão: ' + e.message);
+    }
+}
+
+async function fixErrors() {
+    if (!validationResult || !validationResult.errors.length) return;
+
+    showLoading('Corrigindo com DeepSeek IA...');
+
+    try {
+        const resp = await fetch('/fix', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content: validationResult.content || fileContent,
+                errors: validationResult.errors,
+                filename: fileName,
+                temp_path: tempPath,
+            })
+        });
+        const result = await resp.json();
+
+        if (result.success) {
+            if (result.re_valid && !result.remaining_errors.length) {
+                showFixSuccess(result);
+            } else {
+                showFixPartial(result);
+            }
+        } else {
+            showError(result.error || 'Correção falhou. Tente novamente.');
+        }
+    } catch (e) {
+        showError('Erro na correção: ' + e.message);
+    }
+}
+
+function showLoading(text) {
+    document.getElementById('loading-section').classList.remove('hidden');
+    document.getElementById('results-section').classList.add('hidden');
+    document.getElementById('loading-text').textContent = text;
+}
+
+function showError(msg) {
+    document.getElementById('loading-section').classList.add('hidden');
+    document.getElementById('results-section').classList.remove('hidden');
+    document.getElementById('results-content').innerHTML = `
+        <div class="bg-red-900/30 border border-red-700 rounded-xl p-6">
+            <h3 class="text-red-400 font-semibold text-lg mb-2">❌ Erro</h3>
+            <p class="text-red-300">${escapeHtml(msg)}</p>
+        </div>`;
+}
+
+function showSuccess(data) {
+    document.getElementById('loading-section').classList.add('hidden');
+    document.getElementById('results-section').classList.remove('hidden');
+
+    const tipos = Object.entries(data.record_types)
+        .map(([t, c]) => `<span class="bg-gray-700 px-2 py-0.5 rounded text-xs mono">${t}=${c}</span>`)
+        .join(' ');
+
+    document.getElementById('results-content').innerHTML = `
+        <div class="bg-green-900/20 border border-green-700 rounded-xl p-8 text-center">
+            <div class="text-5xl mb-4">✅</div>
+            <h3 class="text-green-400 font-semibold text-xl mb-2">Arquivo Válido!</h3>
+            <p class="text-green-300/70 mb-4">Nenhum erro encontrado pelo validador SINTEGRA</p>
+            <div class="flex flex-wrap gap-4 justify-center text-sm text-gray-400">
+                <span>📝 ${data.total_lines} linhas</span>
+                <span>📋 ${Object.keys(data.record_types).length} tipos</span>
+                <span>${data.has_crlf ? '✅ CR+LF' : '⚠️ sem CR+LF'}</span>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-1 justify-center">${tipos}</div>
+        </div>`;
+}
+
+function showErrors(data) {
+    document.getElementById('loading-section').classList.add('hidden');
+    document.getElementById('results-section').classList.remove('hidden');
+
+    const errorList = data.errors.map(e => `
+        <div class="error-line bg-red-900/10 border border-red-900/30 rounded-lg p-3 flex items-start gap-3">
+            <span class="mono text-xs bg-red-900/50 text-red-300 px-2 py-0.5 rounded whitespace-nowrap">L${e.linha}</span>
+            <span class="mono text-xs bg-red-900/30 text-red-400 px-2 py-0.5 rounded whitespace-nowrap">${e.codigo}</span>
+            <span class="text-sm text-red-200/80">${escapeHtml(e.msg)}</span>
+        </div>
+    `).join('');
+
+    const warningList = data.warnings?.length ? data.warnings.map(w => `
+        <div class="bg-yellow-900/10 border border-yellow-900/30 rounded-lg p-3 flex items-start gap-3">
+            <span class="mono text-xs bg-yellow-900/50 text-yellow-300 px-2 py-0.5 rounded">L${w.linha}</span>
+            <span class="text-sm text-yellow-200/70">${escapeHtml(w.msg)}</span>
+        </div>
+    `).join('') : '';
+
+    const tipos = Object.entries(data.record_types)
+        .map(([t, c]) => `<span class="bg-gray-700 px-2 py-0.5 rounded text-xs mono">${t}=${c}</span>`)
+        .join(' ');
+
+    document.getElementById('results-content').innerHTML = `
+        <div class="bg-red-900/10 border border-red-800 rounded-xl p-6">
+            <h3 class="text-red-400 font-semibold text-lg mb-1">❌ ${data.errors.length} Erro(s) Encontrado(s)</h3>
+            <p class="text-sm text-gray-400 mb-4">${data.filename} — ${data.total_lines} linhas ${data.has_crlf ? '· CR+LF ✅' : '· ⚠️ sem CR+LF'}</p>
+            <div class="space-y-2 mb-4">${errorList}</div>
+            ${warningList ? `<div class="mt-4"><h4 class="text-yellow-400 text-sm font-medium mb-2">⚠️ Avisos</h4><div class="space-y-2">${warningList}</div></div>` : ''}
+            <div class="mt-4 flex flex-wrap gap-1">${tipos}</div>
+            <div class="mt-4 p-3 bg-accent/10 border border-accent/30 rounded-lg">
+                <p class="text-sm text-gray-300">🤖 Clique em <strong>"Corrigir com IA"</strong> para usar o DeepSeek e corrigir automaticamente.</p>
+            </div>
+        </div>`;
+}
+
+function showFixSuccess(result) {
+    document.getElementById('loading-section').classList.add('hidden');
+    document.getElementById('results-section').classList.remove('hidden');
+
+    // Store for confirmation
+    window.lastFixResult = result;
+    window.lastErrors = validationResult?.errors || [];
+
+    const downloadUrl = `/download/${result.download_name}`;
+
+    document.getElementById('results-content').innerHTML = `
+        <div class="bg-green-900/20 border border-green-700 rounded-xl p-8 text-center">
+            <div class="text-5xl mb-4">🎉</div>
+            <h3 class="text-green-400 font-semibold text-xl mb-2">Arquivo Corrigido com Sucesso!</h3>
+            <p class="text-green-300/70 mb-2">Todos os erros foram resolvidos pela IA</p>
+            <p class="text-sm text-gray-400 mb-6">Revalidado: ✅ sem erros</p>
+            <div class="flex gap-3 justify-center flex-wrap">
+                <a href="${downloadUrl}"
+                   class="inline-flex items-center gap-2 bg-accent hover:bg-red-600 text-white font-medium py-3 px-8 rounded-lg transition">
+                    <span>⬇️</span> Baixar Corrigido
+                </a>
+                <button onclick="confirmFix('${downloadUrl}')"
+                   class="inline-flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white font-medium py-3 px-6 rounded-lg transition">
+                    <span>✅</span> Confirmar & Atualizar MD
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-3">${result.download_name}</p>
+            <p class="text-xs text-gray-600 mt-1">Ao confirmar, este caso será registrado na documentação para correções futuras mais precisas</p>
+        </div>`;
+}
+
+function showFixPartial(result) {
+    document.getElementById('loading-section').classList.add('hidden');
+    document.getElementById('results-section').classList.remove('hidden');
+
+    window.lastFixResult = result;
+    window.lastErrors = validationResult?.errors || [];
+
+    const remaining = result.remaining_errors?.map(e =>
+        `<div class="text-sm text-red-300/70">L${e.linha}: ${escapeHtml(e.msg)}</div>`
+    ).join('') || '';
+
+    const downloadUrl = `/download/${result.download_name}`;
+
+    document.getElementById('results-content').innerHTML = `
+        <div class="bg-yellow-900/10 border border-yellow-700 rounded-xl p-8 text-center">
+            <div class="text-5xl mb-4">⚠️</div>
+            <h3 class="text-yellow-400 font-semibold text-xl mb-2">Corrigido com Ressalvas</h3>
+            <p class="text-yellow-300/70 mb-2">Alguns erros foram corrigidos, mas ainda há pendências:</p>
+            ${remaining ? `<div class="mb-4 space-y-1">${remaining}</div>` : ''}
+            <div class="flex gap-3 justify-center flex-wrap">
+                <a href="${downloadUrl}"
+                   class="inline-flex items-center gap-2 bg-accent hover:bg-red-600 text-white font-medium py-3 px-8 rounded-lg transition">
+                    <span>⬇️</span> Baixar (Correção Parcial)
+                </a>
+                <button onclick="confirmFix('${downloadUrl}')"
+                   class="inline-flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white font-medium py-3 px-6 rounded-lg transition">
+                    <span>✅</span> Confirmar & Atualizar MD
+                </button>
+            </div>
+        </div>`;
+}
+
+async function confirmFix(downloadUrl) {
+    const errors = window.lastErrors || [];
+    if (!errors.length) {
+        alert('Nenhum erro para registrar.');
+        return;
+    }
+
+    const description = prompt('Descreva brevemente o que foi corrigido (opcional):', 'Correção automática confirmada');
+
+    try {
+        const resp = await fetch('/confirm-fix', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                errors: errors,
+                description: description || 'Correção automática confirmada',
+                filename: fileName,
+            })
+        });
+        const result = await resp.json();
+
+        if (result.success) {
+            // Show confirmation
+            const resultsEl = document.getElementById('results-content');
+            const confirmBanner = document.createElement('div');
+            confirmBanner.className = 'mt-4 bg-green-800/30 border border-green-600 rounded-lg p-4 text-center fade-in';
+            confirmBanner.innerHTML = `
+                <p class="text-green-300">✅ Documentação atualizada! (${result.message})</p>
+                <p class="text-xs text-green-400/60 mt-1">O MD foi atualizado com este caso → correções futuras serão mais precisas</p>
+            `;
+            resultsEl.appendChild(confirmBanner);
+
+            // Trigger download
+            window.open(downloadUrl, '_blank');
+        } else {
+            alert('Erro ao atualizar MD: ' + (result.error || 'Desconhecido'));
+        }
+    } catch (e) {
+        alert('Erro de conexão ao confirmar: ' + e.message);
+    }
+}
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+</body>
+</html>
