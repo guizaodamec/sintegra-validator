@@ -61,14 +61,13 @@
         <h2 class="text-xl font-semibold mb-2">📄 Enviar Arquivo SINTEGRA</h2>
         <p class="text-sm text-gray-400 mb-6">Formatos aceitos: .TXT (126 caracteres por linha, encoding latin-1, CR+LF)</p>
 
-        <div class="upload-zone rounded-lg p-10 text-center cursor-pointer"
-             id="drop-zone"
-             onclick="document.getElementById('file-input').click()">
+        <label for="file-input" class="upload-zone rounded-lg p-10 text-center cursor-pointer block"
+             id="drop-zone">
             <div class="text-4xl mb-3">📁</div>
             <p class="text-gray-300 font-medium mb-1">Clique para selecionar ou arraste o arquivo</p>
             <p class="text-xs text-gray-500" id="file-name">Nenhum arquivo selecionado</p>
-            <input type="file" id="file-input" class="hidden" accept=".TXT,.txt" onchange="handleFileSelect(event)">
-        </div>
+        </label>
+        <input type="file" id="file-input" class="hidden" accept=".TXT,.txt" onchange="handleFileSelect(event)">
 
         <div class="flex gap-3 mt-6">
             <button id="validate-btn" disabled
@@ -129,15 +128,22 @@ function formatSize(bytes) {
 
 // Drag and drop
 const dropZone = document.getElementById('drop-zone');
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-accent'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-accent'));
+['dragover', 'dragenter'].forEach(evt => {
+    dropZone.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('border-accent'); });
+});
+['dragleave', 'drop'].forEach(evt => {
+    dropZone.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('border-accent'); });
+});
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropZone.classList.remove('border-accent');
+    e.stopPropagation();
     const file = e.dataTransfer.files[0];
     if (file) {
-        document.getElementById('file-input').files = e.dataTransfer.files;
-        handleFileSelect({ target: { files: [file] } });
+        const input = document.getElementById('file-input');
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
     }
 });
 
