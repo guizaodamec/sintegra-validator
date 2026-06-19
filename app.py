@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from io import BytesIO
 
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -281,6 +281,170 @@ def fix():
             'partial_fix': fixed_content != content,
             'fixed_content': fixed_content if fixed_content != content else None,
         })
+
+
+@app.route('/fix-stream', methods=['POST'])
+def fix_stream():
+    """Auto-fix with streaming progress (SSE)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Dados inválidos'}), 400
+
+    errors = data.get('errors', [])
+    filename = data.get('filename', 'arquivo.TXT')
+    temp_path = data.get('temp_path', '')
+    content = data.get('content', '')
+
+    if not errors:
+        return jsonify({'error': 'Nenhum erro para corrigir'}), 400
+
+    # Read content from temp_path if not provided
+    if not content and temp_path:
+        try:
+            with open(temp_path, 'rb') as f:
+                raw = f.read()
+            content = raw.decode('latin-1')
+        except Exception as e:
+            return jsonify({'error': f'Erro ao ler arquivo: {e}'}), 400
+
+    if not content:
+        return jsonify({'error': 'Sem conteúdo'}), 400
+
+    if not DEEPSEEK_API_KEY:
+        return jsonify({'error': 'DEEPSEEK_API_KEY não configurada'}), 400
+
+    def generate():
+        try:
+            yield f"data: {json.dumps({'step': 'start', 'msg': '🔍 Iniciando análise...', 'errors': len(errors)})}\n\n"
+
+            # Build prompt
+            errors_text = '\n'.join(
+                f"Linha {e['linha']} [{e['codigo']}]: {e['msg']}"
+                for e in errors
+            )
+
+            # Truncate file if needed
+            max_chars = 60000
+            file_preview = content
+            if len(content) > max_chars:
+                mid = max_chars // 2
+                file_preview = (
+                    content[:mid] +
+                    f"\n\n... [TRUNCADO: {len(content) - max_chars} caracteres omitidos] ...\n\n" +
+                    content[-mid:]
+                )
+
+            yield f"data: {json.dumps({'step': 'reading', 'msg': '📖 Lendo documentação SINTEGRA...'})}\n\n"
+
+            prompt = f"""Você é um especialista em arquivos SINTEGRA.
+
+## Documentação de Referência
+
+{MD_DOCS[:8000]}
+
+## Arquivo: {filename}
+## ERROS ENCONTRADOS:
+
+{errors_text}
+
+## Arquivo TXT (trecho relevante):
+
+```
+{file_preview[:40000]}
+```
+
+## Tarefa
+
+Corrija TODOS os erros. Explique cada passo ANTES de executá-lo.
+Depois retorne um JSON final com o conteúdo completo corrigido.
+
+Formato da resposta:
+1. Explique cada erro e a correção necessária (em português)
+2. No final, retorne EXATAMENTE: ```json
+{{"fixed_content": "<conteúdo completo do arquivo>"}}
+```
+
+O fixed_content deve ser o arquivo COMPLETO corrigido (todas as linhas), com CR+LF e encoding latin-1.
+"""
+
+            yield f"data: {json.dumps({'step': 'calling', 'msg': '🤖 Enviando para DeepSeek...'})}\n\n"
+
+            client = OpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url=DEEPSEEK_BASE_URL,
+            )
+
+            response = client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                messages=[
+                    {"role": "system", "content": "Você é um especialista em SINTEGRA. Explique cada passo da correção em português e no final retorne o JSON com o arquivo corrigido."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=16000,
+            )
+
+            reply = response.choices[0].message.content.strip()
+
+            # Extrair etapas e JSON
+            # Separa o texto explicativo do JSON final
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', reply, re.DOTALL)
+            if not json_match:
+                json_match = re.search(r'\{.*"fixed_content".*\}', reply, re.DOTALL)
+
+            explanation = reply
+            fixed_content = None
+
+            if json_match:
+                try:
+                    result = json.loads(json_match.group(1))
+                    fixed_content = result.get('fixed_content', '')
+                except:
+                    pass
+
+                # Remove JSON da explicação
+                explanation = reply[:json_match.start()].strip()
+
+            # Enviar explicação como passos
+            for line in explanation.split('\n'):
+                line = line.strip()
+                if line:
+                    yield f"data: {json.dumps({'step': 'thinking', 'msg': line})}\n\n"
+
+            if fixed_content and len(fixed_content) > 100:
+                # Garantir CR+LF
+                fixed_content = fixed_content.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
+
+                # Salvar
+                output_dir = Path(tempfile.gettempdir()) / 'sintegra_fixes'
+                output_dir.mkdir(exist_ok=True)
+                fixed_name = f"corrigido_{filename}"
+                fixed_path = output_dir / fixed_name
+
+                with open(fixed_path, 'wb') as f:
+                    f.write(fixed_content.encode('latin-1', errors='replace'))
+
+                # Re-validar
+                yield f"data: {json.dumps({'step': 'revalidating', 'msg': '🔍 Revalidando arquivo corrigido...'})}\n\n"
+
+                validator = SintegraValidator(str(fixed_path))
+                is_valid = validator.validate()
+
+                yield f"data: {json.dumps({'step': 'done', 'success': True, 'download': fixed_name, 're_valid': is_valid, 'remaining_errors': validator.errors, 'msg': f'✅ Concluído! Revalidação: {\"limpo\" if is_valid else str(len(validator.errors)) + \" erro(s) restantes\"}'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'step': 'error', 'msg': '❌ DeepSeek não retornou conteúdo válido. Tente novamente.'})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'step': 'error', 'msg': f'❌ Erro: {str(e)[:200]}'})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        }
+    )
 
 
 @app.route('/confirm-fix', methods=['POST'])

@@ -178,10 +178,22 @@ async function doValidate() {
 async function doFix() {
     if (!validationData || !validationData.errors?.length) return;
 
-    showLoading('Corrigindo com DeepSeek IA...');
+    // Show progress panel
+    const resultEl = document.getElementById('result');
+    resultEl.classList.add('active');
+    resultEl.innerHTML = `<div class="card">
+        <h2>🤖 Corrigindo com DeepSeek IA</h2>
+        <div id="steps-container" style="max-height:400px;overflow-y:auto;background:#0d1525;border-radius:8px;padding:16px;margin:12px 0;font-family:monospace;font-size:12px;line-height:1.6">
+            <div style="color:#666">⏳ Aguardando DeepSeek...</div>
+        </div>
+        <div id="fix-result-area"></div>
+    </div>`;
+
+    const stepsEl = document.getElementById('steps-container');
+    const resultArea = document.getElementById('fix-result-area');
 
     try {
-        const r = await fetch('/fix', {
+        const r = await fetch('/fix-stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -190,17 +202,56 @@ async function doFix() {
                 temp_path: validationData.temp_path,
             })
         });
-        const fixData = await r.json();
 
-        hideLoading();
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        if (fixData.success) {
-            showResult('fixed', fixData);
-        } else {
-            showResult('error', fixData.error || 'Correção falhou');
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        const step = data.step;
+                        const msg = data.msg;
+
+                        if (step === 'start') {
+                            stepsEl.innerHTML = `<div style="color:#a5b4fc">${msg}</div>`;
+                        } else if (step === 'reading') {
+                            stepsEl.innerHTML += `<div style="color:#a5b4fc">${msg}</div>`;
+                        } else if (step === 'calling') {
+                            stepsEl.innerHTML += `<div style="color:#fbbf24">${msg}</div>`;
+                        } else if (step === 'thinking') {
+                            stepsEl.innerHTML += `<div style="color:#94a3b8;margin-left:8px;border-left:2px solid #334155;padding-left:8px">▸ ${escHtml(msg)}</div>`;
+                            stepsEl.scrollTop = stepsEl.scrollHeight;
+                        } else if (step === 'revalidating') {
+                            stepsEl.innerHTML += `<div style="color:#a5b4fc;margin-top:8px">${msg}</div>`;
+                        } else if (step === 'done') {
+                            if (data.success) {
+                                const dl = data.download || '';
+                                const reval = data.re_valid ? '✅ Limpo!' : (data.remaining_errors?.length || 0) + ' erro(s) restantes';
+                                stepsEl.innerHTML += `<div style="color:#4ade80;margin-top:8px;font-weight:bold">${msg}</div>`;
+                                resultArea.innerHTML = `<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+                                    <a href="/download/${dl}" class="btn-download" style="text-decoration:none;flex:1;text-align:center;padding:12px;border-radius:8px;background:#16a34a;color:#fff;font-weight:600">⬇️ Baixar Corrigido</a>
+                                    <button class="btn-confirm" onclick="doConfirm('/download/${dl}')" style="flex:1;padding:12px;border-radius:8px;background:#0891b2;color:#fff;font-weight:600;border:none;cursor:pointer">✅ Confirmar & Atualizar MD</button>
+                                </div>`;
+                            }
+                        } else if (step === 'error') {
+                            stepsEl.innerHTML += `<div style="color:#f87171;margin-top:8px">${msg}</div>`;
+                        }
+                    } catch(e) {}
+                }
+            }
         }
     } catch (e) {
-        showResult('error', 'Erro na correção: ' + e.message);
+        resultArea.innerHTML = `<div style="color:#f87171;margin-top:12px">❌ Erro: ${escHtml(e.message)}</div>`;
     }
 }
 
