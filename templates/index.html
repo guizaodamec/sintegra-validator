@@ -67,7 +67,7 @@
             <p class="text-gray-300 font-medium mb-1">Clique para selecionar ou arraste o arquivo</p>
             <p class="text-xs text-gray-500" id="file-name">Nenhum arquivo selecionado</p>
         </label>
-        <input type="file" id="file-input" class="hidden" accept=".TXT,.txt" onchange="handleFileSelect(event)">
+        <input type="file" id="file-input" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0,0,0,0)" accept=".TXT,.txt" onchange="handleFileSelect(event)">
 
         <div class="flex gap-3 mt-6">
             <button id="validate-btn" disabled
