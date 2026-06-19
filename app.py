@@ -430,7 +430,8 @@ O fixed_content deve ser o arquivo COMPLETO corrigido (todas as linhas), com CR+
                 validator = SintegraValidator(str(fixed_path))
                 is_valid = validator.validate()
 
-                yield f"data: {json.dumps({'step': 'done', 'success': True, 'download': fixed_name, 're_valid': is_valid, 'remaining_errors': validator.errors, 'msg': f'✅ Concluído! Revalidação: {\"limpo\" if is_valid else str(len(validator.errors)) + \" erro(s) restantes\"}'})}\n\n"
+                status_msg = '✅ Concluído! Revalidação: ' + ('limpo' if is_valid else str(len(validator.errors)) + ' erro(s) restantes')
+                yield f"data: {json.dumps({'step': 'done', 'success': True, 'download': fixed_name, 're_valid': is_valid, 'remaining_errors': validator.errors, 'msg': status_msg})}\n\n"
             else:
                 yield f"data: {json.dumps({'step': 'error', 'msg': '❌ DeepSeek não retornou conteúdo válido. Tente novamente.'})}\n\n"
 
