@@ -391,23 +391,44 @@ O fixed_content deve ser o arquivo COMPLETO corrigido (todas as linhas), com CR+
             reply = response.choices[0].message.content.strip()
 
             # Extrair etapas e JSON
-            # Separa o texto explicativo do JSON final
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', reply, re.DOTALL)
-            if not json_match:
-                json_match = re.search(r'\{.*"fixed_content".*\}', reply, re.DOTALL)
-
             explanation = reply
             fixed_content = None
 
-            if json_match:
-                try:
-                    result = json.loads(json_match.group(1))
-                    fixed_content = result.get('fixed_content', '')
-                except:
-                    pass
+            # Buscar JSON com fixed_content (pode ser enorme, multi-linha)
+            json_start = reply.find('{"fixed_content"')
+            if json_start < 0:
+                json_start = reply.find('{"fixed_content"'.replace('"', '&quot;'))
 
-                # Remove JSON da explicação
-                explanation = reply[:json_match.start()].strip()
+            if json_start >= 0:
+                # Extract from json_start, matching braces
+                depth = 0
+                json_end = -1
+                for i in range(json_start, len(reply)):
+                    if reply[i] == '{':
+                        depth += 1
+                    elif reply[i] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            json_end = i + 1
+                            break
+
+                if json_end > 0:
+                    json_str = reply[json_start:json_end]
+                    # Try to fix common DeepSeek JSON issues
+                    json_str = json_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                    try:
+                        result = json.loads(json_str)
+                        fixed_content = result.get('fixed_content', '')
+                        if fixed_content:
+                            # Unescape newlines that we double-escaped
+                            fixed_content = fixed_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+                    except:
+                        # Try raw extraction (the fixed_content might be a raw string)
+                        raw_match = re.search(r'"fixed_content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}', reply[json_start:json_end], re.DOTALL)
+                        if raw_match:
+                            fixed_content = raw_match.group(1)
+
+                explanation = reply[:json_start].strip()
 
             # Enviar explicação como passos
             for line in explanation.split('\n'):
